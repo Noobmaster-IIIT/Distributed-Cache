@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package metadata_cache;
+option go_package = "distributed-cache-go/gen/protos";
+service MetadataService {
+  rpc ProcessQuery (QueryRequest) returns (QueryResponse);
+  rpc RegisterServer (RegisterRequest) returns (RegisterResponse);
+  rpc NotifyPromotion (NotifyPromotionRequest) returns (NotifyPromotionResponse);
+}
+
+service CacheService {
+  rpc GetResult (CacheRequest) returns (CacheResponse) {}
+  rpc SetResult (CacheSetRequest) returns (CacheSetResponse) {}
+  rpc GetLoad (EmptyRequest) returns (LoadResponse) {}
+  rpc GetRole (EmptyRequest) returns (RoleResponse) {}
+  rpc PromoteToPrimary (EmptyRequest) returns (PromotionResponse) {}
+  rpc RegisterReplica (ReplicaRegisterRequest) returns (ReplicaRegisterResponse) {}
+  rpc GetSnapshot (EmptyRequest) returns (SnapshotResponse) {}
+  rpc SetSnapshot (SnapshotRequest) returns (SnapshotResponse) {}
+  rpc GetOffset (EmptyRequest) returns (OffsetResponse) {}
+  rpc PingWithOffset (PingRequest) returns (PingResponse) {}
+  rpc InvalidateEntityCache (InvalidateEntityRequest) returns (InvalidateEntityResponse) {}
+}
+
+message QueryRequest {
+  string query = 1;
+}
+
+message QueryResponse {
+  string reply = 1;
+}
+
+message CacheRequest {
+  string query_hash = 1;
+}
+
+message CacheResponse {
+  string result = 1;
+  bool found = 2;
+}
+
+message CacheSetResponse {
+  bool success = 1;
+}
+
+message EmptyRequest {}
+
+message LoadResponse {
+  int32 load = 1;
+}
+
+message RegisterRequest {
+  int32 server_id = 1;
+  int32 port = 2;
+  int32 cluster_id = 3; // ✅ Added cluster_id to registration
+}
+
+message RegisterResponse {
+  bool success = 1;
+}
+
+message RoleResponse {
+  bool is_primary = 1;
+}
+
+message PromotionResponse {
+  bool success = 1;
+}
+
+message ReplicaRegisterRequest {
+  int32 replica_id = 1;
+  int32 replica_port = 2;
+}
+
+message ReplicaRegisterResponse {
+  bool success = 1;
+}
+
+// Notify metadata server about promotion of a replica to primary
+message NotifyPromotionRequest {
+  int32 server_id = 1;
+  int32 port = 2;
+  int32 cluster_id = 3; // ✅ Added cluster_id to promotion
+}
+
+message NotifyPromotionResponse {
+  bool success = 1;
+}
+
+message PingRequest {
+  int32 offset = 1;
+  int32 server_id = 2;
+}
+
+message PingResponse {
+  bool up_to_date = 1;
+}
+
+message SnapshotRequest {
+  bytes data = 1;
+}
+
+message SnapshotResponse {
+  bool success = 1;
+  bytes data = 2;  // <-- add this line
+}
+
+message CacheSetRequest {
+  string query_hash = 1;
+  string result = 2;
+  string entity = 3;  // The entity/table name
+  string operation = 4;  // Operation type: "read", "create", "update", "delete"
+}
+
+message OffsetResponse {
+  int32 offset = 1;
+}
+
+message InvalidateEntityRequest {
+  string entity = 1;  // The entity/table name to invalidate
+}
+
+message InvalidateEntityResponse {
+  bool success = 1;
+}

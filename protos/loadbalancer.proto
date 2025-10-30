@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+// This tells protoc where to place the generated Go code.
+option go_package = "distributed-cache-go/gen/protos";
+
+package load_balancer;
+
+// This service defines the simple key-value API that the Gateway uses to
+// interact with the caching layer, abstracting away the complexity of the cache cluster.
+service LoadBalancerCacheService {
+  // Retrieves cached data using a simple string key.
+  rpc GetCachedData (LoadBalancerCacheRequest) returns (LoadBalancerCacheResponse) {}
+
+  // Stores or invalidates data in the cache using a simple string key.
+  rpc SetCachedData (LoadBalancerCacheSetRequest) returns (LoadBalancerCacheSetResponse) {}
+}
+
+message LoadBalancerCacheRequest {
+  // The unique key, typically a hash of the original client query.
+  string key = 1;
+}
+
+message LoadBalancerCacheResponse {
+  // True if the data was found in the cache.
+  bool found = 1;
+
+  // The cached data, usually in JSON format.
+  string value = 2;
+}
+
+message LoadBalancerCacheSetRequest {
+  string key = 1;
+  string value = 2;
+
+  // The entity/table name, used for targeted cache invalidations.
+  string entity = 3;
+
+  // The type of database operation (e.g., "read", "update") that
+  // triggered this cache set, allowing the cache to decide whether
+  // to store the value or invalidate an entity.
+  string operation = 4;
+}
+
+message LoadBalancerCacheSetResponse {
+  bool success = 1;
+}

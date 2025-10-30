@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package gateway;
+option go_package = "distributed-cache-go/gen/protos";
+service GatewayService {
+  rpc ProcessQuery(GatewayRequest) returns (GatewayResponse);
+}
+
+message GatewayRequest {
+  string json_query = 1;
+}
+
+message GatewayResponse {
+  string response = 1;
+}

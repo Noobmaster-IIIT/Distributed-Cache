@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package sentinel;
+option go_package = "distributed-cache-go/gen/protos";
+// Request from a cache server to register itself
+message CacheServerRegistrationRequest {
+  int32 cluster_id = 1;
+  int32 server_id = 2;
+  int32 port = 3;
+}
+
+// Response to the cache server after registration
+message CacheServerRegistrationResponse {
+  bool success = 1;
+  bool is_primary = 2;
+  int32 primary_port = 3; // Port of the current primary (if not primary)
+}
+
+// Request to query the primary of a cluster
+message PrimaryForClusterRequest {
+  int32 cluster_id = 1;
+}
+
+// Response with primary server info
+message PrimaryForClusterResponse {
+  bool found = 1;
+  int32 server_id = 2;
+  int32 port = 3;
+}
+
+// Add these message definitions
+message HealthCheckRequest {
+  int32 server_id = 1;
+  int32 port = 2;
+}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+}
+
+message GetClusterReplicasRequest {
+  int32 cluster_id = 1;
+  int32 server_id = 2;  // ID of the server requesting (to exclude itself)
+}
+
+message GetClusterReplicasResponse {
+  bool success = 1;
+  repeated ReplicaInfo replicas = 2;
+}
+
+message ReplicaInfo {
+  int32 server_id = 1;
+  int32 port = 2;
+}
+
+// Sentinel service definition
+service SentinelService {
+  // Called by a cache server to register itself
+  rpc RegisterServer (CacheServerRegistrationRequest) returns (CacheServerRegistrationResponse);
+
+  // Called by a replica to find the current primary of its cluster
+  rpc GetPrimaryForCluster (PrimaryForClusterRequest) returns (PrimaryForClusterResponse);
+
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+
+  rpc GetClusterReplicas (GetClusterReplicasRequest) returns (GetClusterReplicasResponse);
+
+}

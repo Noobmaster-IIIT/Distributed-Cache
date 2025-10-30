@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package backend;
+
+option go_package = "distributed-cache-go/gen/protos";
+
+service BackendService {
+  rpc ExecuteSQL(BackendRequest) returns (BackendResponse);
+}
+
+message BackendRequest {
+  string sql_query = 1;
+  // Parameters are provided here as JSON for simplicity.
+  string params = 2;
+}
+
+message BackendResponse {
+  string result = 1;
+}

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package heartbeat;
+option go_package = "distributed-cache-go/gen/protos";
+service HeartbeatService {
+  rpc CheckHealth(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message HeartbeatRequest {
+  string gateway_id = 1;
+}
+
+message HeartbeatResponse {
+  bool received = 1;
+}

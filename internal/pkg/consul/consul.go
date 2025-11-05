@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.comcom/hashicorp/consul/api"
+	"github.com/hashicorp/consul/api"
 )
 
 // Client wraps the Consul API client.

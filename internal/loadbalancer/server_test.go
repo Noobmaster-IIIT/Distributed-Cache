@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	pb "distributed-cache-go/gen/protos"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
@@ -27,13 +26,11 @@ func (m *MockCacheService) SetResult(ctx context.Context, in *pb.CacheSetRequest
 	return args.Get(0).(*pb.CacheSetResponse), args.Error(1)
 }
 
-// GetLoad is the method the compiler said was missing.
 func (m *MockCacheService) GetLoad(ctx context.Context, in *pb.EmptyRequest, opts ...grpc.CallOption) (*pb.LoadResponse, error) {
 	args := m.Called(ctx, in)
 	return args.Get(0).(*pb.LoadResponse), args.Error(1)
 }
 
-// These are the other methods needed to fully implement the interface.
 func (m *MockCacheService) GetRole(ctx context.Context, in *pb.EmptyRequest, opts ...grpc.CallOption) (*pb.RoleResponse, error) {
 	args := m.Called(ctx, in)
 	return args.Get(0).(*pb.RoleResponse), args.Error(1)
@@ -44,9 +41,29 @@ func (m *MockCacheService) PromoteToPrimary(ctx context.Context, in *pb.EmptyReq
 	return args.Get(0).(*pb.PromotionResponse), args.Error(1)
 }
 
+func (m *MockCacheService) RegisterReplica(ctx context.Context, in *pb.ReplicaRegisterRequest, opts ...grpc.CallOption) (*pb.ReplicaRegisterResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*pb.ReplicaRegisterResponse), args.Error(1)
+}
+
+func (m *MockCacheService) GetSnapshot(ctx context.Context, in *pb.EmptyRequest, opts ...grpc.CallOption) (*pb.SnapshotResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*pb.SnapshotResponse), args.Error(1)
+}
+
+func (m *MockCacheService) SetSnapshot(ctx context.Context, in *pb.SnapshotRequest, opts ...grpc.CallOption) (*pb.SnapshotResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*pb.SnapshotResponse), args.Error(1)
+}
+
 func (m *MockCacheService) GetOffset(ctx context.Context, in *pb.EmptyRequest, opts ...grpc.CallOption) (*pb.OffsetResponse, error) {
 	args := m.Called(ctx, in)
 	return args.Get(0).(*pb.OffsetResponse), args.Error(1)
+}
+
+func (m *MockCacheService) PingWithOffset(ctx context.Context, in *pb.PingRequest, opts ...grpc.CallOption) (*pb.PingResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*pb.PingResponse), args.Error(1)
 }
 
 func (m *MockCacheService) InvalidateEntityCache(ctx context.Context, in *pb.InvalidateEntityRequest, opts ...grpc.CallOption) (*pb.InvalidateEntityResponse, error) {
@@ -75,8 +92,6 @@ func TestSetAndGetCachedData(t *testing.T) {
 	// --- Test SetCachedData ---
 	key := "student:read:{\"id\":1}"
 	value := `[{"id": 1, "name": "John Doe"}]`
-	// hashQuery is not exported, so we redefine it for the test or call a public method.
-	// For simplicity, we assume we know the hash logic. Let's call a helper.
 	queryHash := hashQuery(key)
 
 	setRequest := &pb.LoadBalancerCacheSetRequest{
@@ -97,7 +112,6 @@ func TestSetAndGetCachedData(t *testing.T) {
 	setResp, err := s.SetCachedData(context.Background(), setRequest)
 	assert.NoError(t, err)
 	assert.True(t, setResp.Success)
-	// Verify that the query map and count were updated
 	assert.Equal(t, serverID, s.queryMap[queryHash])
 	assert.Equal(t, 1, s.queryCount[serverID])
 	mockStub.AssertExpectations(t)
@@ -115,7 +129,6 @@ func TestSetAndGetCachedData(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, getResp.Found)
 	assert.Equal(t, value, getResp.Value)
-	// Query count should now be 2
 	assert.Equal(t, 2, s.queryCount[serverID])
 	mockStub.AssertExpectations(t)
 

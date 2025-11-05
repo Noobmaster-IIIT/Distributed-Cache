@@ -7,13 +7,21 @@ import (
 	"os"
 	"sync"
 
+	pb "distributed-cache-go/gen/protos"
 	"distributed-cache-go/internal/cache/lru"
 )
 
 const (
-	maxCacheEntries = 200
-	persistenceDir  = "cache_data"
+	maxCacheEntries        = 200
+	persistenceDir         = "cache_data"
+	replicationBacklogSize = 10
 )
+
+// ReplicationCommand holds a command for the backlog
+type ReplicationCommand struct {
+	Offset     int64
+	SetRequest *pb.CacheSetRequest
+}
 
 // CacheData represents the structure of the data to be persisted to disk.
 type CacheData struct {
@@ -25,22 +33,24 @@ type CacheData struct {
 
 // Cache is the main cache data structure.
 type Cache struct {
-	mu          sync.RWMutex
-	lru         *lru.Cache
-	entityIndex map[string]map[string]struct{} // map[entity]map[queryHash]struct{}
-	offset      int64
-	serverID    int32
-	filePath    string
+	mu                 sync.RWMutex
+	lru                *lru.Cache
+	entityIndex        map[string]map[string]struct{}
+	offset             int64
+	serverID           int32
+	filePath           string
+	replicationBacklog []ReplicationCommand // The backlog of recent commands
 }
 
 // NewCache creates and initializes a new cache, loading from disk if possible.
 func NewCache(serverID int32) (*Cache, error) {
 	filePath := fmt.Sprintf("%s/cache_server_%d.json", persistenceDir, serverID)
 	c := &Cache{
-		lru:         lru.New(maxCacheEntries),
-		entityIndex: make(map[string]map[string]struct{}),
-		serverID:    serverID,
-		filePath:    filePath,
+		lru:                lru.New(maxCacheEntries),
+		entityIndex:        make(map[string]map[string]struct{}),
+		serverID:           serverID,
+		filePath:           filePath,
+		replicationBacklog: make([]ReplicationCommand, 0, replicationBacklogSize),
 	}
 
 	if err := os.MkdirAll(persistenceDir, 0755); err != nil {
@@ -76,6 +86,14 @@ func (c *Cache) Set(key, value, entity string) {
 		}
 		c.entityIndex[entity][key] = struct{}{}
 	}
+
+	setRequest := &pb.CacheSetRequest{
+		QueryHash: key,
+		Result:    value,
+		Entity:    entity,
+		Operation: "read",
+	}
+	c.addToBacklog(c.offset, setRequest)
 }
 
 // InvalidateEntity removes all cache entries associated with a given entity.
@@ -93,7 +111,83 @@ func (c *Cache) InvalidateEntity(entity string) {
 		c.lru.Remove(hash)
 	}
 	delete(c.entityIndex, entity)
-	c.offset++ // Invalidation is a replicated event
+	c.offset++
+
+	setRequest := &pb.CacheSetRequest{
+		Entity:    entity,
+		Operation: "invalidate",
+	}
+	c.addToBacklog(c.offset, setRequest)
+}
+
+// addToBacklog is a helper to manage the backlog
+func (c *Cache) addToBacklog(offset int64, req *pb.CacheSetRequest) {
+	cmd := ReplicationCommand{
+		Offset:     offset,
+		SetRequest: req,
+	}
+	c.replicationBacklog = append(c.replicationBacklog, cmd)
+
+	if len(c.replicationBacklog) > replicationBacklogSize {
+		c.replicationBacklog = c.replicationBacklog[1:]
+	}
+}
+
+// GetCommandsSince gets commands from the backlog since a given offset
+func (c *Cache) GetCommandsSince(replicaOffset int64) ([]*pb.CacheSetRequest, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if len(c.replicationBacklog) == 0 || replicaOffset >= c.offset {
+		return nil, true // Replica is up-to-date
+	}
+
+	firstOffsetInBacklog := int64(0)
+	if len(c.replicationBacklog) > 0 {
+		firstOffsetInBacklog = c.replicationBacklog[0].Offset
+	}
+
+	if replicaOffset < firstOffsetInBacklog {
+		log.Printf("Replica offset %d is too old. First in backlog is %d.", replicaOffset, firstOffsetInBacklog)
+		return nil, false // Replica is too far behind, needs full snapshot
+	}
+
+	var commands []*pb.CacheSetRequest
+	for _, cmd := range c.replicationBacklog {
+		if cmd.Offset > replicaOffset {
+			commands = append(commands, cmd.SetRequest)
+		}
+	}
+	return commands, true
+}
+
+// GetSnapshot gets a full snapshot of the cache
+func (c *Cache) GetSnapshot() ([]byte, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	items, _ := c.lru.GetAll()
+	return json.Marshal(items)
+}
+
+// SetSnapshot applies a full snapshot to the cache
+func (c *Cache) SetSnapshot(data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var items map[string]lru.Entry
+	if err := json.Unmarshal(data, &items); err != nil {
+		return err
+	}
+
+	order := make([]string, 0, len(items))
+	for key := range items {
+		order = append(order, key)
+	}
+
+	c.lru.Load(items, order)
+	c.offset = int64(c.lru.Len())
+	log.Printf("CacheServer %d: Applied snapshot, cache has %d items, offset is %d", c.serverID, c.lru.Len(), c.offset)
+	return nil
 }
 
 // Len returns the number of items in the cache.
@@ -114,7 +208,9 @@ func (c *Cache) Offset() int64 {
 func (c *Cache) Persist() {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
+	if c.lru.Len() == 0 {
+		return // Don't bother writing empty files
+	}
 	items, order := c.lru.GetAll()
 	entityIndex := make(map[string][]string)
 	for entity, hashes := range c.entityIndex {
@@ -132,7 +228,7 @@ func (c *Cache) Persist() {
 
 	file, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		log.Printf("CacheServer %d: Failed to marshal cache data for persistence: %v", c.serverID, err)
+		log.Printf("CacheServer %d: Failed to marshal cache data: %v", c.serverID, err)
 		return
 	}
 

@@ -14,6 +14,7 @@ import (
 )
 
 const checkInterval = 5 * time.Second
+const dialTimeout = 2 * time.Second // Time to wait for a connection
 
 // Monitor handles the health checking and failover logic.
 type Monitor struct {
@@ -42,6 +43,7 @@ func (m *Monitor) Run() {
 	for {
 		select {
 		case <-ticker.C:
+			log.Println("Sentinel Monitor: ----- Running health check cycle -----")
 			m.performChecks()
 		case <-m.stopCh:
 			log.Println("Sentinel monitor stopped.")
@@ -56,17 +58,16 @@ func (m *Monitor) Stop() {
 	m.wg.Wait()
 }
 
+type serverToCheck struct {
+	serverInfo
+	isPrimary bool
+	clusterID int32
+}
+
 // performChecks iterates through all registered servers and checks their health.
 func (m *Monitor) performChecks() {
 	m.server.mu.RLock()
-	// Create a copy of servers to check to avoid holding the lock for too long.
-	type serverToCheck struct {
-		serverInfo
-		isPrimary bool
-		clusterID int32
-	}
 	var checks []serverToCheck
-
 	for cid, cluster := range m.server.clusters {
 		if cluster.primary != nil {
 			checks = append(checks, serverToCheck{*cluster.primary, true, cid})
@@ -77,42 +78,56 @@ func (m *Monitor) performChecks() {
 	}
 	m.server.mu.RUnlock()
 
-	// Perform health checks concurrently
-	var wg sync.WaitGroup
-	for _, s := range checks {
-		wg.Add(1)
-		go func(srv serverToCheck) {
-			defer wg.Done()
-			m.checkServerHealth(srv.clusterID, srv.serverID, srv.port, srv.isPrimary)
-		}(s)
+	if len(checks) == 0 {
+		log.Println("Sentinel Monitor: No servers registered to check.")
+		return
 	}
-	wg.Wait()
+
+	log.Printf("Sentinel Monitor: Checking %d registered servers...", len(checks))
+
+	for _, srv := range checks {
+		isHealthy, offset := m.checkServerHealth(srv.serverID, srv.port)
+		m.updateHealthStatus(srv.clusterID, srv.serverID, isHealthy, offset, srv.isPrimary)
+	}
 }
 
-// checkServerHealth pings a single server and updates its health status.
-func (m *Monitor) checkServerHealth(clusterID, serverID, port int32, isPrimary bool) {
+// checkServerHealth pings a single server using a blocking dial.
+// This is the corrected function.
+func (m *Monitor) checkServerHealth(serverID int32, port int32) (bool, int32) {
 	addr := fmt.Sprintf("localhost:%d", port)
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	// Create a context with a short timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	defer cancel()
+
+	// Dial with WithBlock() to force a synchronous connection attempt.
+	conn, err := grpc.DialContext(
+		ctx,
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(), // <-- Forces the dial to block and actually connect
+	)
+
+	// If DialContext fails (timeout, connection refused), the server is dead.
 	if err != nil {
-		log.Printf("Monitor: Failed to dial server %d: %v", serverID, err)
-		m.updateHealthStatus(clusterID, serverID, false, 0, isPrimary)
-		return
+		log.Printf("Monitor: FAILED to dial server %d at port %d: %v", serverID, port, err)
+		return false, 0
 	}
 	defer conn.Close()
 
+	// If dial succeeded, the server is alive. We can now get the offset.
 	client := pb.NewCacheServiceClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 
-	// We can use GetOffset as a health check and to get replication status
+	// We can reuse the same context for the RPC call
 	resp, err := client.GetOffset(ctx, &pb.EmptyRequest{})
 	if err != nil {
-		log.Printf("Monitor: Health check failed for server %d on port %d", serverID, port)
-		m.updateHealthStatus(clusterID, serverID, false, 0, isPrimary)
-		return
+		// This is a secondary failure (e.g., server is up but RPC is broken)
+		log.Printf("Monitor: FAILED to get offset from ALIVE server %d at port %d: %v", serverID, port, err)
+		return false, 0
 	}
 
-	m.updateHealthStatus(clusterID, serverID, true, resp.Offset, isPrimary)
+	log.Printf("Monitor: SUCCESS ping for server %d at port %d (Offset: %d)", serverID, port, resp.Offset)
+	return true, resp.Offset
 }
 
 // updateHealthStatus updates the server's health in the main server struct.
@@ -122,7 +137,8 @@ func (m *Monitor) updateHealthStatus(clusterID, serverID int32, isHealthy bool, 
 
 	health, ok := m.server.serverHealth[serverID]
 	if !ok {
-		return // Server was deregistered
+		log.Printf("Monitor: updateHealthStatus called for server %d, but it is no longer registered.", serverID)
+		return
 	}
 
 	if isHealthy {
@@ -131,10 +147,16 @@ func (m *Monitor) updateHealthStatus(clusterID, serverID int32, isHealthy bool, 
 	} else {
 		health.failedChecks++
 		log.Printf("Sentinel: Server %d has failed check %d/%d", serverID, health.failedChecks, healthThreshold)
-		if isPrimary && health.failedChecks >= healthThreshold {
-			log.Printf("Sentinel: PRIMARY server %d in cluster %d is DOWN. Initiating failover.", serverID, clusterID)
-			// Need to run promotion in a separate goroutine to avoid deadlock
-			go m.server.promoteReplica(clusterID)
+
+		if health.failedChecks >= healthThreshold {
+			log.Printf("Sentinel: Server %d marked as DOWN.", serverID)
+
+			m.server.removeServer(serverID)
+
+			if isPrimary {
+				log.Printf("Sentinel: PRIMARY server %d in cluster %d is DOWN. Initiating failover.", serverID, clusterID)
+				m.server.promoteReplica(clusterID)
+			}
 		}
 	}
 }

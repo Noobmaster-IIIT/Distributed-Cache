@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pb "distributed-cache-go/gen/protos"
+	"distributed-cache-go/internal/pkg/consul"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -17,32 +18,31 @@ import (
 type Server struct {
 	pb.UnimplementedCacheServiceServer
 
-	serverID    int32
-	port        int32
-	clusterID   int32
-	isPrimary   bool
-	mu          sync.RWMutex
-	cache       *Cache
-	replication *ReplicationManager
-
-	sentinelAddress     string
-	loadBalancerAddress string
+	serverID     int32
+	port         int32
+	clusterID    int32
+	isPrimary    bool
+	mu           sync.RWMutex
+	cache        *Cache
+	replication  *ReplicationManager
+	consulClient *consul.Client
+	ackPolicy    int
 }
 
 // NewServer creates a new Cache server instance.
-func NewServer(serverID, port, clusterID int32) (*Server, error) {
+func NewServer(serverID, port, clusterID int32, client *consul.Client, ackPolicy int) (*Server, error) {
 	cache, err := NewCache(serverID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
 	s := &Server{
-		serverID:            serverID,
-		port:                port,
-		clusterID:           clusterID,
-		cache:               cache,
-		sentinelAddress:     "localhost:8081",
-		loadBalancerAddress: "localhost:8083",
+		serverID:     serverID,
+		port:         port,
+		clusterID:    clusterID,
+		cache:        cache,
+		consulClient: client,
+		ackPolicy:    ackPolicy,
 	}
 	s.replication = NewReplicationManager(s)
 	return s, nil
@@ -55,7 +55,12 @@ func (s *Server) Shutdown() {
 
 // RegisterAndDetermineRole contacts the Sentinel to register and find its role.
 func (s *Server) RegisterAndDetermineRole() error {
-	conn, err := grpc.Dial(s.sentinelAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	sentinelAddress, err := s.consulClient.Discover("sentinel")
+	if err != nil {
+		return fmt.Errorf("failed to discover sentinel: %w", err)
+	}
+
+	conn, err := grpc.Dial(sentinelAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("failed to connect to sentinel: %w", err)
 	}
@@ -87,20 +92,19 @@ func (s *Server) RegisterAndDetermineRole() error {
 		if resp.PrimaryPort == 0 {
 			return fmt.Errorf("sentinel assigned replica role but provided no primary port")
 		}
-		go s.replication.SyncWithPrimary(resp.PrimaryPort)
+		primaryAddr := fmt.Sprintf("localhost:%d", resp.PrimaryPort)
+		go s.replication.SyncWithPrimary(primaryAddr)
 	}
 	return nil
 }
 
 // --- gRPC Service Method Implementations ---
 
-// GetResult retrieves a value from the cache.
 func (s *Server) GetResult(ctx context.Context, req *pb.CacheRequest) (*pb.CacheResponse, error) {
 	val, found := s.cache.Get(req.QueryHash)
 	return &pb.CacheResponse{Result: val, Found: found}, nil
 }
 
-// SetResult sets a value in the cache and handles replication if primary.
 func (s *Server) SetResult(ctx context.Context, req *pb.CacheSetRequest) (*pb.CacheSetResponse, error) {
 	log.Printf("CacheServer %d: Processing '%s' for hash %s", s.serverID, req.Operation, req.QueryHash)
 
@@ -111,36 +115,39 @@ func (s *Server) SetResult(ctx context.Context, req *pb.CacheSetRequest) (*pb.Ca
 	if req.Operation == "read" {
 		s.cache.Set(req.QueryHash, req.Result, req.Entity)
 	} else {
-		// For write operations, we invalidate the entity.
 		s.cache.InvalidateEntity(req.Entity)
 	}
 
-	// If this server is a primary, replicate the operation to replicas.
 	if isPrimary {
-		s.replication.Replicate(req)
+		if s.ackPolicy == 0 {
+			s.replication.ReplicateAsync(req)
+		} else {
+			log.Printf("Primary %d: Waiting for %d replica(s) to acknowledge...", s.serverID, s.ackPolicy)
+			success := s.replication.ReplicateAndWait(req, s.ackPolicy)
+			if !success {
+				log.Printf("Primary %d: Timed out waiting for %d ACKs. Write may not be fully replicated.", s.serverID, s.ackPolicy)
+			}
+			log.Printf("Primary %d: Acknowledgment received.", s.serverID)
+		}
 	}
 
 	return &pb.CacheSetResponse{Success: true}, nil
 }
 
-// GetLoad returns the current number of items in the cache.
 func (s *Server) GetLoad(ctx context.Context, req *pb.EmptyRequest) (*pb.LoadResponse, error) {
 	return &pb.LoadResponse{Load: int32(s.cache.Len())}, nil
 }
 
-// GetOffset returns the current replication offset.
 func (s *Server) GetOffset(ctx context.Context, req *pb.EmptyRequest) (*pb.OffsetResponse, error) {
 	return &pb.OffsetResponse{Offset: int32(s.cache.Offset())}, nil
 }
 
-// GetRole returns whether the server is a primary or a replica.
 func (s *Server) GetRole(ctx context.Context, req *pb.EmptyRequest) (*pb.RoleResponse, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return &pb.RoleResponse{IsPrimary: s.isPrimary}, nil
 }
 
-// PromoteToPrimary handles a promotion notification from the Sentinel.
 func (s *Server) PromoteToPrimary(ctx context.Context, req *pb.EmptyRequest) (*pb.PromotionResponse, error) {
 	s.mu.Lock()
 	wasPrimary := s.isPrimary
@@ -149,16 +156,13 @@ func (s *Server) PromoteToPrimary(ctx context.Context, req *pb.EmptyRequest) (*p
 
 	if !wasPrimary {
 		log.Printf("CacheServer %d: PROMOTED to PRIMARY for cluster %d.", s.serverID, s.clusterID)
-		// Stop trying to sync with an old primary
 		s.replication.StopSyncing()
-		// Start acting as a primary
 		go s.registerWithLoadBalancer()
 		go s.discoverAndManageReplicas()
 	}
 	return &pb.PromotionResponse{Success: true}, nil
 }
 
-// InvalidateEntityCache is called by a primary to invalidate a replica's cache.
 func (s *Server) InvalidateEntityCache(ctx context.Context, req *pb.InvalidateEntityRequest) (*pb.InvalidateEntityResponse, error) {
 	s.mu.RLock()
 	isPrimary := s.isPrimary
@@ -170,12 +174,64 @@ func (s *Server) InvalidateEntityCache(ctx context.Context, req *pb.InvalidateEn
 	return &pb.InvalidateEntityResponse{Success: true}, nil
 }
 
+// --- RPC HANDLERS FOR REPLICATION ---
+
+func (s *Server) PingWithOffset(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
+	s.mu.RLock()
+	isPrimary := s.isPrimary
+	s.mu.RUnlock()
+	if !isPrimary {
+		return nil, fmt.Errorf("not a primary")
+	}
+
+	commands, upToDate := s.cache.GetCommandsSince(int64(req.Offset))
+	if !upToDate {
+		return &pb.PingResponse{UpToDate: false, Commands: nil}, nil
+	}
+
+	return &pb.PingResponse{UpToDate: true, Commands: commands}, nil
+}
+
+func (s *Server) GetSnapshot(ctx context.Context, req *pb.EmptyRequest) (*pb.SnapshotResponse, error) {
+	s.mu.RLock()
+	isPrimary := s.isPrimary
+	s.mu.RUnlock()
+	if !isPrimary {
+		return nil, fmt.Errorf("not a primary")
+	}
+
+	data, err := s.cache.GetSnapshot()
+	if err != nil {
+		return &pb.SnapshotResponse{Success: false, Data: nil}, err
+	}
+	return &pb.SnapshotResponse{Success: true, Data: data}, nil
+}
+
+func (s *Server) SetSnapshot(ctx context.Context, req *pb.SnapshotRequest) (*pb.SnapshotResponse, error) {
+	s.mu.RLock()
+	isPrimary := s.isPrimary
+	s.mu.RUnlock()
+	if isPrimary {
+		return nil, fmt.Errorf("cannot apply snapshot to a primary")
+	}
+
+	if err := s.cache.SetSnapshot(req.Data); err != nil {
+		return &pb.SnapshotResponse{Success: false}, err
+	}
+	return &pb.SnapshotResponse{Success: true}, nil
+}
+
 // --- Helper methods for primary duties ---
 
 func (s *Server) registerWithLoadBalancer() {
-	log.Printf("CacheServer %d: Registering as PRIMARY with Load Balancer.", s.serverID)
-	// This uses NotifyPromotion to inform the LB of the current primary.
-	conn, err := grpc.Dial(s.loadBalancerAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	lbAddress, err := s.consulClient.Discover("load-balancer")
+	if err != nil {
+		log.Printf("CacheServer %d: Failed to discover Load Balancer: %v", s.serverID, err)
+		return
+	}
+
+	log.Printf("CacheServer %d: Registering as PRIMARY with Load Balancer at %s.", s.serverID, lbAddress)
+	conn, err := grpc.Dial(lbAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Printf("CacheServer %d: Failed to connect to LB: %v", s.serverID, err)
 		return
@@ -197,10 +253,16 @@ func (s *Server) registerWithLoadBalancer() {
 }
 
 func (s *Server) discoverAndManageReplicas() {
-	log.Printf("CacheServer %d: Discovering replicas for cluster %d.", s.serverID, s.clusterID)
-	conn, err := grpc.Dial(s.sentinelAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	sentinelAddress, err := s.consulClient.Discover("sentinel")
 	if err != nil {
-		log.Printf("CacheServer %d: Failed to connect to Sentinel for replica discovery: %v", s.serverID, err)
+		log.Printf("CacheServer %d: Failed to discover Sentinel for replica discovery: %v", s.serverID, err)
+		return
+	}
+
+	log.Printf("CacheServer %d: Discovering replicas from Sentinel at %s.", s.serverID, sentinelAddress)
+	conn, err := grpc.Dial(sentinelAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Printf("CacheServer %d: Failed to connect to Sentinel: %v", s.serverID, err)
 		return
 	}
 	defer conn.Close()
@@ -211,7 +273,7 @@ func (s *Server) discoverAndManageReplicas() {
 
 	resp, err := client.GetClusterReplicas(ctx, &pb.GetClusterReplicasRequest{
 		ClusterId: s.clusterID,
-		ServerId:  s.serverID, // Exclude self
+		ServerId:  s.serverID,
 	})
 	if err != nil {
 		log.Printf("CacheServer %d: Failed to get replicas from Sentinel: %v", s.serverID, err)

@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package metadata_cache;
 option go_package = "distributed-cache-go/gen/protos";
+
+package metadata_cache;
+
 service MetadataService {
-  rpc ProcessQuery (QueryRequest) returns (QueryResponse);
-  rpc RegisterServer (RegisterRequest) returns (RegisterResponse);
   rpc NotifyPromotion (NotifyPromotionRequest) returns (NotifyPromotionResponse);
 }
 
@@ -52,7 +52,7 @@ message LoadResponse {
 message RegisterRequest {
   int32 server_id = 1;
   int32 port = 2;
-  int32 cluster_id = 3; // ✅ Added cluster_id to registration
+  int32 cluster_id = 3;
 }
 
 message RegisterResponse {
@@ -76,11 +76,10 @@ message ReplicaRegisterResponse {
   bool success = 1;
 }
 
-// Notify metadata server about promotion of a replica to primary
 message NotifyPromotionRequest {
   int32 server_id = 1;
   int32 port = 2;
-  int32 cluster_id = 3; // ✅ Added cluster_id to promotion
+  int32 cluster_id = 3;
 }
 
 message NotifyPromotionResponse {
@@ -94,6 +93,7 @@ message PingRequest {
 
 message PingResponse {
   bool up_to_date = 1;
+  repeated CacheSetRequest commands = 2; // <-- THIS IS THE CRITICAL ADDITION
 }
 
 message SnapshotRequest {
@@ -102,14 +102,14 @@ message SnapshotRequest {
 
 message SnapshotResponse {
   bool success = 1;
-  bytes data = 2;  // <-- add this line
+  bytes data = 2;
 }
 
 message CacheSetRequest {
   string query_hash = 1;
   string result = 2;
-  string entity = 3;  // The entity/table name
-  string operation = 4;  // Operation type: "read", "create", "update", "delete"
+  string entity = 3;
+  string operation = 4;
 }
 
 message OffsetResponse {
@@ -117,7 +117,7 @@ message OffsetResponse {
 }
 
 message InvalidateEntityRequest {
-  string entity = 1;  // The entity/table name to invalidate
+  string entity = 1;
 }
 
 message InvalidateEntityResponse {

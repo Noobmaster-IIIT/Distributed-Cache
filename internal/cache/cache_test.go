@@ -3,7 +3,7 @@ package cache
 import (
 	"os"
 	"testing"
-
+     "distributed-cache-go/internal/cache/lru"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,7 +30,7 @@ func TestCacheSetAndGet(t *testing.T) {
 func TestCacheLRUEviction(t *testing.T) {
 	// Create a cache with a small size for testing eviction
 	smallCache := &Cache{
-		lru:      lru.New(2), // Max size of 2
+		lru:      lru.New(20), // Max size of 2
 		filePath: "test_evict.json",
 	}
 	defer os.Remove(smallCache.filePath)

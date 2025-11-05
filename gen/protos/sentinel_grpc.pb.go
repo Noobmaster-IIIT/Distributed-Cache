@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.2.0
 // - protoc             v3.21.12
-// source: sentinel.proto
+// source: protos/sentinel.proto
 
 package protos
 
@@ -213,5 +213,5 @@ var SentinelService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "sentinel.proto",
+	Metadata: "protos/sentinel.proto",
 }

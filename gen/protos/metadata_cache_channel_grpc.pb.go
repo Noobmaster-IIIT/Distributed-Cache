@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.2.0
 // - protoc             v3.21.12
-// source: metadata_cache_channel.proto
+// source: protos/metadata_cache_channel.proto
 
 package protos
 
@@ -22,8 +22,6 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MetadataServiceClient interface {
-	ProcessQuery(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResponse, error)
-	RegisterServer(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	NotifyPromotion(ctx context.Context, in *NotifyPromotionRequest, opts ...grpc.CallOption) (*NotifyPromotionResponse, error)
 }
 
@@ -33,24 +31,6 @@ type metadataServiceClient struct {
 
 func NewMetadataServiceClient(cc grpc.ClientConnInterface) MetadataServiceClient {
 	return &metadataServiceClient{cc}
-}
-
-func (c *metadataServiceClient) ProcessQuery(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResponse, error) {
-	out := new(QueryResponse)
-	err := c.cc.Invoke(ctx, "/metadata_cache.MetadataService/ProcessQuery", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *metadataServiceClient) RegisterServer(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
-	out := new(RegisterResponse)
-	err := c.cc.Invoke(ctx, "/metadata_cache.MetadataService/RegisterServer", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *metadataServiceClient) NotifyPromotion(ctx context.Context, in *NotifyPromotionRequest, opts ...grpc.CallOption) (*NotifyPromotionResponse, error) {
@@ -66,8 +46,6 @@ func (c *metadataServiceClient) NotifyPromotion(ctx context.Context, in *NotifyP
 // All implementations must embed UnimplementedMetadataServiceServer
 // for forward compatibility
 type MetadataServiceServer interface {
-	ProcessQuery(context.Context, *QueryRequest) (*QueryResponse, error)
-	RegisterServer(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	NotifyPromotion(context.Context, *NotifyPromotionRequest) (*NotifyPromotionResponse, error)
 	mustEmbedUnimplementedMetadataServiceServer()
 }
@@ -76,12 +54,6 @@ type MetadataServiceServer interface {
 type UnimplementedMetadataServiceServer struct {
 }
 
-func (UnimplementedMetadataServiceServer) ProcessQuery(context.Context, *QueryRequest) (*QueryResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ProcessQuery not implemented")
-}
-func (UnimplementedMetadataServiceServer) RegisterServer(context.Context, *RegisterRequest) (*RegisterResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RegisterServer not implemented")
-}
 func (UnimplementedMetadataServiceServer) NotifyPromotion(context.Context, *NotifyPromotionRequest) (*NotifyPromotionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NotifyPromotion not implemented")
 }
@@ -96,42 +68,6 @@ type UnsafeMetadataServiceServer interface {
 
 func RegisterMetadataServiceServer(s grpc.ServiceRegistrar, srv MetadataServiceServer) {
 	s.RegisterService(&MetadataService_ServiceDesc, srv)
-}
-
-func _MetadataService_ProcessQuery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QueryRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MetadataServiceServer).ProcessQuery(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/metadata_cache.MetadataService/ProcessQuery",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataServiceServer).ProcessQuery(ctx, req.(*QueryRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _MetadataService_RegisterServer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegisterRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MetadataServiceServer).RegisterServer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/metadata_cache.MetadataService/RegisterServer",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MetadataServiceServer).RegisterServer(ctx, req.(*RegisterRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _MetadataService_NotifyPromotion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -160,20 +96,12 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*MetadataServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "ProcessQuery",
-			Handler:    _MetadataService_ProcessQuery_Handler,
-		},
-		{
-			MethodName: "RegisterServer",
-			Handler:    _MetadataService_RegisterServer_Handler,
-		},
-		{
 			MethodName: "NotifyPromotion",
 			Handler:    _MetadataService_NotifyPromotion_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "metadata_cache_channel.proto",
+	Metadata: "protos/metadata_cache_channel.proto",
 }
 
 // CacheServiceClient is the client API for CacheService service.
@@ -619,5 +547,5 @@ var CacheService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "metadata_cache_channel.proto",
+	Metadata: "protos/metadata_cache_channel.proto",
 }

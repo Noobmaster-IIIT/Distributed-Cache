@@ -50,9 +50,9 @@ func TestCreateConsistentCacheKey(t *testing.T) {
 		},
 	}
 
-	key1 := createConsistentCacheKey(query1)
-	key2 := createConsistentCacheKey(query2)
-	key3 := createConsistentCacheKey(query3)
+	key1,_ := createConsistentCacheKey(query1)
+	key2,_:= createConsistentCacheKey(query2)
+	key3,_ := createConsistentCacheKey(query3)
 
 	// In the current simple implementation, key1 and key2 will be different because JSON
 	// marshaling does not guarantee key order. A production-ready implementation

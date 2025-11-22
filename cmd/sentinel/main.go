@@ -6,6 +6,7 @@ import (
 	"net"
 
 	pb "distributed-cache-go/gen/protos"
+	"distributed-cache-go/internal/pkg/config"
 	"distributed-cache-go/internal/pkg/consul"
 	"distributed-cache-go/internal/pkg/graceful"
 	"distributed-cache-go/internal/sentinel"
@@ -13,8 +14,9 @@ import (
 	"google.golang.org/grpc"
 )
 
+var sentinelPort = config.GetEnv("SENTINEL_PORT", ":8081")
+
 const (
-	sentinelPort  = ":8081"
 	consulService = "sentinel"
 )
 
@@ -31,18 +33,13 @@ func main() {
 		log.Fatalf("Failed to create consul client: %v", err)
 	}
 
+	// Create the Sentinel server (no longer needs a monitor)
 	sentinelServer := sentinel.NewServer(consulClient)
-	monitor := sentinel.NewMonitor(sentinelServer)
-
-	go monitor.Run()
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterSentinelServiceServer(grpcServer, sentinelServer)
 
-	// Create a unique ID for this service instance.
 	serviceID := fmt.Sprintf("%s-%s", consulService, sentinelPort)
-
-	// Register this service with Consul using the unique ID.
 	if err := consulClient.Register(serviceID, consulService, sentinelPort); err != nil {
 		log.Fatalf("Failed to register with consul: %v", err)
 	}
@@ -51,8 +48,7 @@ func main() {
 	go func() {
 		graceful.Shutdown(func() {
 			log.Println("Shutting down sentinel...")
-			monitor.Stop()
-			// Deregister using the unique ID.
+			// No monitor to stop
 			if err := consulClient.Deregister(serviceID); err != nil {
 				log.Printf("Failed to deregister from consul: %v", err)
 			}

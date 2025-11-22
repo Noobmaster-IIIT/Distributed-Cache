@@ -27,6 +27,10 @@ type Server struct {
 	replication  *ReplicationManager
 	consulClient *consul.Client
 	ackPolicy    int
+
+	// ctx is used to signal shutdown to long-running goroutines like HeartbeatStream
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewServer creates a new Cache server instance.
@@ -36,6 +40,9 @@ func NewServer(serverID, port, clusterID int32, client *consul.Client, ackPolicy
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
+	// Create a context that can be cancelled. This is CRITICAL for the HeartbeatStream.
+	ctx, cancel := context.WithCancel(context.Background())
+
 	s := &Server{
 		serverID:     serverID,
 		port:         port,
@@ -43,13 +50,16 @@ func NewServer(serverID, port, clusterID int32, client *consul.Client, ackPolicy
 		cache:        cache,
 		consulClient: client,
 		ackPolicy:    ackPolicy,
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 	s.replication = NewReplicationManager(s)
 	return s, nil
 }
 
-// Shutdown handles graceful shutdown tasks like data persistence.
+// Shutdown handles graceful shutdown tasks like data persistence and context cancellation.
 func (s *Server) Shutdown() {
+	s.cancel() // Signal all goroutines (like HeartbeatStream) to stop
 	s.cache.Persist()
 }
 
@@ -92,6 +102,7 @@ func (s *Server) RegisterAndDetermineRole() error {
 		if resp.PrimaryPort == 0 {
 			return fmt.Errorf("sentinel assigned replica role but provided no primary port")
 		}
+		// Build the full address string for the replication manager
 		primaryAddr := fmt.Sprintf("localhost:%d", resp.PrimaryPort)
 		go s.replication.SyncWithPrimary(primaryAddr)
 	}
@@ -148,6 +159,7 @@ func (s *Server) GetRole(ctx context.Context, req *pb.EmptyRequest) (*pb.RoleRes
 	return &pb.RoleResponse{IsPrimary: s.isPrimary}, nil
 }
 
+// PromoteToPrimary handles a promotion notification from the Sentinel.
 func (s *Server) PromoteToPrimary(ctx context.Context, req *pb.EmptyRequest) (*pb.PromotionResponse, error) {
 	s.mu.Lock()
 	wasPrimary := s.isPrimary
@@ -159,6 +171,12 @@ func (s *Server) PromoteToPrimary(ctx context.Context, req *pb.EmptyRequest) (*p
 		s.replication.StopSyncing()
 		go s.registerWithLoadBalancer()
 		go s.discoverAndManageReplicas()
+
+		// We just got promoted, but our old context might be cancelled or outdated.
+		// Let's create a new one for the heartbeat stream.
+		s.mu.Lock()
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+		s.mu.Unlock()
 	}
 	return &pb.PromotionResponse{Success: true}, nil
 }
@@ -219,6 +237,43 @@ func (s *Server) SetSnapshot(ctx context.Context, req *pb.SnapshotRequest) (*pb.
 		return &pb.SnapshotResponse{Success: false}, err
 	}
 	return &pb.SnapshotResponse{Success: true}, nil
+}
+
+// --- NEW METHOD: HeartbeatStream (THIS WAS MISSING FROM YOUR UPLOAD) ---
+// This is the server-side implementation of the stream.
+func (s *Server) HeartbeatStream(req *pb.CacheHeartbeatRequest, stream pb.CacheService_HeartbeatStreamServer) error {
+	log.Printf("HeartbeatStream initiated for Sentinel (Server: %d, Cluster: %d)", req.ServerId, req.ClusterId)
+
+	// Use the server's main context
+	ctx := s.ctx
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// REMOVED: The check for !isPrimary.
+			// We want Replicas to send heartbeats too!
+
+			s.mu.RLock()
+			offset := int32(s.cache.Offset())
+			s.mu.RUnlock()
+
+			hb := &pb.CacheHeartbeat{
+				Offset:    offset,
+				Timestamp: time.Now().Unix(),
+			}
+
+			if err := stream.Send(hb); err != nil {
+				log.Printf("Heartbeat: Failed to send to Sentinel: %v", err)
+				return err
+			}
+
+		case <-ctx.Done():
+			log.Printf("Heartbeat: Server %d shutting down. Closing stream.", s.serverID)
+			return nil
+		}
+	}
 }
 
 // --- Helper methods for primary duties ---

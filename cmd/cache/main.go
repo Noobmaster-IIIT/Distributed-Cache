@@ -25,6 +25,7 @@ var (
 )
 
 func main() {
+	fmt.Printf("ACTUAL_SERVER_PID: %d\n", os.Getpid())
 	flag.Parse()
 
 	// Get the base port from environment, default to 9000

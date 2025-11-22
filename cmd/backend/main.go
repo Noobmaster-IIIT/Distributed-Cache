@@ -7,15 +7,18 @@ import (
 	"os"
 
 	pb "distributed-cache-go/gen/protos"
+
 	"distributed-cache-go/internal/backend"
+	"distributed-cache-go/internal/pkg/config"
 	"distributed-cache-go/internal/pkg/consul"
 	"distributed-cache-go/internal/pkg/graceful"
 
 	"google.golang.org/grpc"
 )
 
+var backendPort = config.GetEnv("BACKEND_PORT", ":8080")
+
 const (
-	backendPort   = ":8080"
 	consulService = "backend-server"
 )
 

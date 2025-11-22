@@ -119,6 +119,9 @@ type CacheServiceClient interface {
 	GetOffset(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*OffsetResponse, error)
 	PingWithOffset(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 	InvalidateEntityCache(ctx context.Context, in *InvalidateEntityRequest, opts ...grpc.CallOption) (*InvalidateEntityResponse, error)
+	// --- NEW RPC ---
+	// A persistent stream from a Primary to the Sentinel
+	HeartbeatStream(ctx context.Context, in *CacheHeartbeatRequest, opts ...grpc.CallOption) (CacheService_HeartbeatStreamClient, error)
 }
 
 type cacheServiceClient struct {
@@ -228,6 +231,38 @@ func (c *cacheServiceClient) InvalidateEntityCache(ctx context.Context, in *Inva
 	return out, nil
 }
 
+func (c *cacheServiceClient) HeartbeatStream(ctx context.Context, in *CacheHeartbeatRequest, opts ...grpc.CallOption) (CacheService_HeartbeatStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &CacheService_ServiceDesc.Streams[0], "/metadata_cache.CacheService/HeartbeatStream", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &cacheServiceHeartbeatStreamClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type CacheService_HeartbeatStreamClient interface {
+	Recv() (*CacheHeartbeat, error)
+	grpc.ClientStream
+}
+
+type cacheServiceHeartbeatStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *cacheServiceHeartbeatStreamClient) Recv() (*CacheHeartbeat, error) {
+	m := new(CacheHeartbeat)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // CacheServiceServer is the server API for CacheService service.
 // All implementations must embed UnimplementedCacheServiceServer
 // for forward compatibility
@@ -243,6 +278,9 @@ type CacheServiceServer interface {
 	GetOffset(context.Context, *EmptyRequest) (*OffsetResponse, error)
 	PingWithOffset(context.Context, *PingRequest) (*PingResponse, error)
 	InvalidateEntityCache(context.Context, *InvalidateEntityRequest) (*InvalidateEntityResponse, error)
+	// --- NEW RPC ---
+	// A persistent stream from a Primary to the Sentinel
+	HeartbeatStream(*CacheHeartbeatRequest, CacheService_HeartbeatStreamServer) error
 	mustEmbedUnimplementedCacheServiceServer()
 }
 
@@ -282,6 +320,9 @@ func (UnimplementedCacheServiceServer) PingWithOffset(context.Context, *PingRequ
 }
 func (UnimplementedCacheServiceServer) InvalidateEntityCache(context.Context, *InvalidateEntityRequest) (*InvalidateEntityResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InvalidateEntityCache not implemented")
+}
+func (UnimplementedCacheServiceServer) HeartbeatStream(*CacheHeartbeatRequest, CacheService_HeartbeatStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method HeartbeatStream not implemented")
 }
 func (UnimplementedCacheServiceServer) mustEmbedUnimplementedCacheServiceServer() {}
 
@@ -494,6 +535,27 @@ func _CacheService_InvalidateEntityCache_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CacheService_HeartbeatStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CacheHeartbeatRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CacheServiceServer).HeartbeatStream(m, &cacheServiceHeartbeatStreamServer{stream})
+}
+
+type CacheService_HeartbeatStreamServer interface {
+	Send(*CacheHeartbeat) error
+	grpc.ServerStream
+}
+
+type cacheServiceHeartbeatStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *cacheServiceHeartbeatStreamServer) Send(m *CacheHeartbeat) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // CacheService_ServiceDesc is the grpc.ServiceDesc for CacheService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -546,6 +608,12 @@ var CacheService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CacheService_InvalidateEntityCache_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "HeartbeatStream",
+			Handler:       _CacheService_HeartbeatStream_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "protos/metadata_cache_channel.proto",
 }

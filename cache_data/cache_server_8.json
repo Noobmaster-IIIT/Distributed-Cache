@@ -1,0 +1,17 @@
+{
+  "items": {
+    "7437038e841c23432728787939248a8da7d58fa7a9a7acb23f6542f85d101aef": {
+      "Key": "7437038e841c23432728787939248a8da7d58fa7a9a7acb23f6542f85d101aef",
+      "Value": "[{\"first_name\":\"Ada\",\"id\":1,\"last_name\":\"Lovelace\",\"program\":\"Analytics\"}]"
+    }
+  },
+  "entity_index": {
+    "student": [
+      "7437038e841c23432728787939248a8da7d58fa7a9a7acb23f6542f85d101aef"
+    ]
+  },
+  "order": [
+    "7437038e841c23432728787939248a8da7d58fa7a9a7acb23f6542f85d101aef"
+  ],
+  "offset": 1
+}

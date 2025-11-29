@@ -9,15 +9,15 @@ import (
 	"strings"
 
 	pb "distributed-cache-go/gen/protos"
-
+    "distributed-cache-go/internal/pkg/config"
 	_ "github.com/go-sql-driver/mysql"
 )
 
-const (
-	dbUser     = "cacheuser"
-	dbPassword = "1234"
-	dbName     = "university"
-)
+// const (
+// 	dbUser     = "cacheuser"
+// 	dbPassword = "1234"
+// 	dbName     = "university"
+// )
 
 // Server implements the backend and heartbeat gRPC services.
 type Server struct {
@@ -28,13 +28,18 @@ type Server struct {
 
 // NewServer creates a new Backend server and initializes its database connection pool.
 func NewServer() (*Server, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(127.0.0.1:3306)/%s", dbUser, dbPassword, dbName)
+	// Read database configuration from environment variables
+	dbUser := config.GetEnv("DB_USER", "cacheuser")
+	dbPassword := config.GetEnv("DB_PASSWORD", "yourpassword")
+	dbName := config.GetEnv("DB_NAME", "university")
+	dbHost := config.GetEnv("DB_HOST", "127.0.0.1:3306")
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s", dbUser, dbPassword, dbHost, dbName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Configure the connection pool
 	db.SetMaxOpenConns(32)
 	db.SetMaxIdleConns(10)
 

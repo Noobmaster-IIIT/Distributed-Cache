@@ -239,7 +239,7 @@ func (s *Server) SetSnapshot(ctx context.Context, req *pb.SnapshotRequest) (*pb.
 	return &pb.SnapshotResponse{Success: true}, nil
 }
 
-// --- NEW METHOD: HeartbeatStream (THIS WAS MISSING FROM YOUR UPLOAD) ---
+// --- NEW METHOD: HeartbeatStream  ---
 // This is the server-side implementation of the stream.
 func (s *Server) HeartbeatStream(req *pb.CacheHeartbeatRequest, stream pb.CacheService_HeartbeatStreamServer) error {
 	log.Printf("HeartbeatStream initiated for Sentinel (Server: %d, Cluster: %d)", req.ServerId, req.ClusterId)

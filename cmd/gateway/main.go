@@ -9,12 +9,12 @@ import (
 	"distributed-cache-go/internal/gateway"
 	"distributed-cache-go/internal/pkg/consul"
 	"distributed-cache-go/internal/pkg/graceful"
-
+    "distributed-cache-go/internal/pkg/config"
 	"google.golang.org/grpc"
 )
-
+var gatewayPort = config.GetEnv("GATEWAY_PORT", ":8082")
 const (
-	gatewayPort   = ":8082"
+	
 	consulService = "gateway-server"
 )
 

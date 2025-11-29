@@ -13,8 +13,8 @@ import (
 	"time"
 
 	pb "distributed-cache-go/gen/protos"
+	// "distributed-cache-go/internal/pkg/config" // <-- Make sure this is imported
 	"distributed-cache-go/internal/pkg/consul"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -33,7 +33,6 @@ func NewServer(consulClient *consul.Client) (*Server, error) {
 		consulClient:     consulClient,
 		backendIsHealthy: true,
 	}
-	// Start a background goroutine to periodically check backend health
 	go s.checkBackendHealth()
 	return s, nil
 }
@@ -45,26 +44,22 @@ func (s *Server) ProcessQuery(ctx context.Context, req *pb.GatewayRequest) (*pb.
 		return &pb.GatewayResponse{Response: `{"error": "Invalid JSON"}`}, nil
 	}
 
-	// Check backend health before proceeding
 	s.mu.RLock()
 	isHealthy := s.backendIsHealthy
 	s.mu.RUnlock()
 
-	// Create a consistent cache key
 	cacheKey, err := createConsistentCacheKey(queryData)
 	if err != nil {
 		return &pb.GatewayResponse{Response: fmt.Sprintf(`{"error": "failed to create cache key: %v"}`, err)}, nil
 	}
 	log.Printf("Gateway: Using cache key %s", cacheKey)
 
-	// Dynamically discover the load balancer
 	lbAddress, err := s.consulClient.Discover("load-balancer")
 	if err != nil {
 		log.Printf("Gateway: CRITICAL: Could not discover load balancer: %v", err)
 		return &pb.GatewayResponse{Response: `{"error": "Service discovery failed for load-balancer"}`}, nil
 	}
 
-	// 1. Check cache via Load Balancer
 	var cacheResp *pb.LoadBalancerCacheResponse
 	conn, err := grpc.Dial(lbAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err == nil {
@@ -83,7 +78,6 @@ func (s *Server) ProcessQuery(ctx context.Context, req *pb.GatewayRequest) (*pb.
 		return &pb.GatewayResponse{Response: `{"error": "Service unavailable", "details": "Backend is down and data not in cache"}`}, nil
 	}
 
-	// 2. On cache miss, query the backend
 	sqlQuery, params, err := buildSQLFromQuery(queryData)
 	if err != nil {
 		return &pb.GatewayResponse{Response: fmt.Sprintf(`{"error": "%v"}`, err)}, nil
@@ -92,12 +86,10 @@ func (s *Server) ProcessQuery(ctx context.Context, req *pb.GatewayRequest) (*pb.
 	paramsJSON, _ := json.Marshal(map[string]interface{}{"params": params})
 	backendResp, err := s.executeBackendSQL(ctx, sqlQuery, string(paramsJSON))
 	if err != nil {
-		// Mark backend as unhealthy
 		s.updateBackendHealth(false)
 		return &pb.GatewayResponse{Response: fmt.Sprintf(`{"error": "Backend service error", "details": "%v"}`, err)}, nil
 	}
 
-	// 3. Set the result in the cache via the Load Balancer
 	operation, _ := queryData["operation"].(string)
 	entity, _ := queryData["entity"].(string)
 
@@ -212,12 +204,29 @@ func createConsistentCacheKey(queryData map[string]interface{}) (string, error) 
 	return hex.EncodeToString(hash[:]), nil
 }
 
+// --- buildSQLFromQuery: THIS IS THE MODIFIED FUNCTION ---
+
+// Define a list of allowed table names.
+var allowedEntities = map[string]bool{
+	"student": true,
+	//  add more tables here as your application grows
+	// "course": true,
+	// "professor": true,
+}
+
 // buildSQLFromQuery translates the JSON query into an SQL statement.
 func buildSQLFromQuery(queryData map[string]interface{}) (string, []interface{}, error) {
 	entity, ok := queryData["entity"].(string)
 	if !ok {
 		return "", nil, fmt.Errorf("'entity' field is required")
 	}
+
+	// --- SECURITY FIX: Validate the entity name against the allow-list ---
+	if !allowedEntities[entity] {
+		return "", nil, fmt.Errorf("invalid or disallowed entity: %s", entity)
+	}
+	// --- END SECURITY FIX ---
+
 	operation, ok := queryData["operation"].(string)
 	if !ok {
 		return "", nil, fmt.Errorf("'operation' field is required")
@@ -235,7 +244,6 @@ func buildSQLFromQuery(queryData map[string]interface{}) (string, []interface{},
 		var columns []string
 		var placeholders []string
 		var params []interface{}
-		// Sort keys for consistent query generation
 		var keys []string
 		for k := range data {
 			keys = append(keys, k)
@@ -246,6 +254,7 @@ func buildSQLFromQuery(queryData map[string]interface{}) (string, []interface{},
 			placeholders = append(placeholders, "?")
 			params = append(params, data[k])
 		}
+		// The 'entity' variable is now safe to use in Sprintf
 		sql := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
 			entity, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
 		return sql, params, nil

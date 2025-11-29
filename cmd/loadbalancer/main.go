@@ -9,12 +9,12 @@ import (
 	"distributed-cache-go/internal/loadbalancer"
 	"distributed-cache-go/internal/pkg/consul"
 	"distributed-cache-go/internal/pkg/graceful"
-
+    "distributed-cache-go/internal/pkg/config"
 	"google.golang.org/grpc"
 )
-
+var lbPort = config.GetEnv("LB_PORT", ":8084")
 const (
-	lbPort        = ":8084"
+	
 	consulService = "load-balancer"
 )
 
